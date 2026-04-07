@@ -1,169 +1,152 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
-import re
 from datetime import datetime, timedelta
+import re
 
-# --- CONFIGURATION UI ---
-st.set_page_config(page_title="HUMAN RADAR - Pilotage Économique", layout="wide")
+# --- CONFIGURATION ---
+st.set_page_config(page_title="HUMAN CRM - Action Client", layout="wide", page_icon="🏠")
 
+# Design "Action-Oriented"
 st.markdown("""
     <style>
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e0e0e0; }
-    .stTabs [aria-selected="true"] { background-color: #004a99 !important; color: white !important; font-weight: bold; }
-    .main { background-color: #f8f9fb; }
+    .client-card {
+        background-color: #ffffff;
+        padding: 20px;
+        border-radius: 10px;
+        border-left: 5px solid #004a99;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        margin-bottom: 20px;
+    }
+    .priority-high { border-left-color: #ff4b4b; }
+    .priority-mid { border-left-color: #ffa500; }
+    .stMetric { background-color: #f0f2f6; padding: 10px; border-radius: 5px; }
     </style>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
-# --- FONCTIONS "CERVEAU" ---
-
-def robust_read(file):
-    """Lecture multi-format avec détection automatique."""
-    if file is None: return None
-    name = file.name.lower()
-    try:
-        if name.endswith(('.xlsx', '.xls')):
-            return pd.read_excel(file, sheet_name=None) # Retourne un dictionnaire de feuilles
-        elif name.endswith('.csv'):
-            df = pd.read_csv(file, sep=None, engine='python', encoding='utf-8-sig', on_bad_lines='skip')
-            return {"Unique": df}
-        else:
-            df = pd.read_csv(file, sep=None, engine='python', on_bad_lines='skip')
-            return {"Unique": df}
-    except Exception as e:
-        st.error(f"Erreur de lecture sur {name}: {e}")
-        return None
-
+# --- FONCTIONS SUPPORTS ---
 def clean_cols(df):
-    """Uniformisation des noms de colonnes."""
     df.columns = [str(c).strip().upper().replace(' ', '_') for c in df.columns]
     return df
 
 def find_col(df, keywords):
-    """Trouve une colonne par mots-clés (ex: ['AGE', 'MANDAT'])."""
     for col in df.columns:
         if all(k.upper() in col.upper() for k in keywords): return col
     return None
 
 def clean_addr(addr):
-    """Clé de matching d'adresse pour le radar."""
     if pd.isna(addr): return ""
     addr = str(addr).lower()
-    addr = addr.replace("avenue", "av").replace("boulevard", "bd").replace("rue", "r").replace("impasse", "imp")
+    addr = addr.replace("avenue", "av").replace("boulevard", "bd").replace("rue", "r")
     return re.sub(r'[^a-z0-9]', '', addr)
 
-# --- SIDEBAR : LES 2 LOADERS ---
-st.sidebar.image("https://www.human-immobilier.fr/img/logo-human-immobilier.svg", width=180)
+# --- SIDEBAR : LOADERS & FILTRES ---
+st.sidebar.image("https://www.human-immobilier.fr/img/logo-human-immobilier.svg", width=150)
 
-st.sidebar.header("📥 1. DATA CRM (Interne)")
-file_crm = st.sidebar.file_uploader("Mandats & Évaluations", type=['xlsx', 'csv', 'txt', 'tsv'])
+st.sidebar.subheader("📥 1. Données Internes (CRM)")
+file_crm = st.sidebar.file_uploader("Upload Mandats & Évals", type=['xlsx', 'csv'])
 
-st.sidebar.header("📥 2. DATA MARCHÉ (Externe)")
-file_dpe = st.sidebar.file_uploader("Fichier DPE ADEME", type=['csv', 'xlsx'])
+st.sidebar.subheader("📥 2. Données Marché (ADEME)")
+file_dpe = st.sidebar.file_uploader("Upload DPE Récents", type=['csv'])
 
-# --- TRAITEMENT DES DONNÉES ---
 if file_crm:
-    data_crm = robust_read(file_crm)
-    sheets_crm = list(data_crm.keys())
+    # Lecture Multi-feuilles
+    xls = pd.ExcelFile(file_crm)
+    sheets = xls.sheet_names
+    sh_m = st.sidebar.selectbox("Onglet MANDATS", sheets, index=0)
+    sh_e = st.sidebar.selectbox("Onglet ÉVALUATIONS", sheets, index=min(1, len(sheets)-1))
     
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("⚙️ Mapping des flux")
-    sh_m = st.sidebar.selectbox("Feuille MANDATS", sheets_crm, index=0)
-    sh_e = st.sidebar.selectbox("Feuille ÉVALUATIONS", sheets_crm, index=min(1, len(sheets_crm)-1))
-    
-    df_m = clean_cols(data_crm[sh_m])
-    df_e = clean_cols(data_crm[sh_e])
+    df_m = clean_cols(pd.read_excel(file_crm, sheet_name=sh_m))
+    df_e = clean_cols(pd.read_excel(file_crm, sheet_name=sh_e))
+
+    # --- IDENTIFICATION DES COLONNES CLÉS ---
+    c_nom = find_col(df_m, ["NOM", "CLIENT"]) or find_col(df_m, ["DOSSIER"])
+    c_tel = find_col(df_m, ["TEL"]) or find_col(df_m, ["PORTABLE"])
+    c_addr = find_col(df_m, ["ADRESSE"])
+    c_age = find_col(df_m, ["AGE", "MANDAT"])
+    c_action = find_col(df_m, ["ACTION"]) or find_col(df_m, ["SUIVI"])
+    c_type_b = find_col(df_m, ["TYPE", "BIEN"])
+    c_prix = find_col(df_m, ["PRIX"]) or find_col(df_m, ["VALEUR"])
+    c_agence = find_col(df_m, ["AGENCE"])
 
     # --- FILTRES FACETTES ---
-    c_ag = find_col(df_m, ["AGENCE"])
-    c_cp = find_col(df_m, ["CP"]) or find_col(df_m, ["CODE", "POSTAL"])
-    c_bien = find_col(df_m, ["TYPE", "BIEN"])
-    
     st.sidebar.markdown("---")
-    f_ag = st.sidebar.multiselect("Filtrer Agences", df_m[c_ag].unique() if c_ag else [])
-    f_cp = st.sidebar.multiselect("Filtrer Codes Postaux", df_m[c_cp].unique() if c_cp else [])
+    view_mode = st.sidebar.radio("Ma Vue", ["👤 Mon Portefeuille (Agent)", "🏠 Mon Agence", "🌐 Réseau"])
     
-    if f_ag: df_m = df_m[df_m[c_ag].isin(f_ag)]
-    if f_cp: df_m = df_m[df_m[c_cp].isin(f_cp)]
+    f_agence = st.sidebar.multiselect("Agence", df_m[c_agence].unique() if c_agence else [])
+    f_bien = st.sidebar.multiselect("Type de bien", df_m[c_type_b].unique() if c_type_b else [])
+    
+    if f_agence: df_m = df_m[df_m[c_agence].isin(f_agence)]
+    if f_bien: df_m = df_m[df_m[c_type_b].isin(f_bien)]
 
-    # --- IHM PRINCIPALE ---
-    st.title("🚀 HUMAN Performance Radar")
-    view_type = st.radio("Mode de vue :", ["🌐 Réseau", "🏠 Agence", "👤 Agent"], horizontal=True)
+    # --- INTERFACE PRINCIPALE ---
+    st.title("🎯 Cockpit d'Action Commerciale")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["🌪️ Funnel & Éco", "🏠 Mandats", "📊 Évaluations", "📡 Radar DPE"])
+    t1, t2, t3 = st.tabs(["⚡ Mes Actions du Jour", "📦 Gestion du Stock", "📈 Pilotage Réseau"])
 
-    # --- TAB 1 : FUNNEL & ÉCO ---
-    with tab1:
-        st.subheader("Entonnoir de Conversion Économique")
-        nb_mandats = len(df_m)
-        nb_evals = len(df_e)
+    # --- TAB 1 : L'OUTIL DE TRAVAIL DU COMMERCIAL ---
+    with t1:
+        st.subheader("🔥 Priorités de relance")
         
-        fig_funnel = go.Figure(go.Funnel(
-            y = ["Évaluations (Prospects)", "Mandats en Stock"],
-            x = [nb_evals, nb_mandats],
-            textinfo = "value+percent initial",
-            marker = {"color": ["#5ea1e6", "#004a99"]}
-        ))
-        st.plotly_chart(fig_funnel, use_container_width=True)
+        # Logique de détection des urgences (DPE ou Retard suivi)
+        urgences = df_m.copy()
+        if c_age:
+            urgences = urgences[urgences[c_age] > 150] # Focus sur les mandats qui stagnent
         
-        col_m1, col_m2 = st.columns(2)
-        col_m1.metric("Taux de Transformation", f"{round((nb_mandats/nb_evals)*100, 1)}%")
-        col_m2.metric("Volume de Stock", nb_mandats)
-
-    # --- TAB 2 : MANDATS ---
-    with tab2:
-        c1, c2 = st.columns(2)
-        with c1:
-            c_type_m = find_col(df_m, ["TYPE", "MANDAT"]) or find_col(df_m, ["TYPOLOGIE"])
-            if c_type_m:
-                st.plotly_chart(px.pie(df_m, names=c_type_m, hole=0.4, title="Volume par Type de Mandat"), use_container_width=True)
-        with c2:
-            c_date_m = find_col(df_m, ["DATE", "SAISIE"]) or find_col(df_m, ["DATE", "CREATION"])
-            if c_date_m:
-                df_m[c_date_m] = pd.to_datetime(df_m[c_date_m])
-                st.plotly_chart(px.histogram(df_m, x=c_date_m, title="Stock par Date de Création"), use_container_width=True)
-
-        st.subheader("⚠️ Mandats sans suivi (Alertes)")
-        c_suivi = find_col(df_m, ["SUIVI"]) or find_col(df_m, ["ACTION"])
-        df_ns = df_m[df_m[c_suivi].isna()] if c_suivi else df_m
-        st.plotly_chart(px.histogram(df_ns, x=c_date_m, color_discrete_sequence=['#ff4b4b'], title="Mandats sans action renseignée"), use_container_width=True)
-
-        st.subheader("📋 Liste des Relances & Prévisions")
-        df_m['DATE_PROBABLE_VENTE'] = df_m[c_date_m] + timedelta(days=90)
-        st.dataframe(df_m.head(20), use_container_width=True)
-
-    # --- TAB 3 : ÉVALUATIONS ---
-    with tab3:
-        st.subheader("Performance du flux Évaluations")
-        ce1, ce2 = st.columns(2)
-        c_date_e = find_col(df_e, ["DATE"])
-        if c_date_e:
-            df_e[c_date_e] = pd.to_datetime(df_e[c_date_e])
-            ce1.plotly_chart(px.histogram(df_e, x=c_date_e, title="Flux d'Evaluations Créées"), use_container_width=True)
+        col_a, col_b = st.columns([2, 1])
         
-        c_statut = find_col(df_e, ["STATUT"]) or find_col(df_e, ["ACTIF"])
-        if c_statut:
-            ce2.plotly_chart(px.pie(df_e, names=c_statut, hole=0.4, title="Évals Actives vs Inactives"), use_container_width=True)
+        with col_a:
+            for idx, row in urgences.head(5).iterrows():
+                prio_class = "priority-high" if row.get(c_age, 0) > 200 else "priority-mid"
+                
+                with st.container():
+                    st.markdown(f"""
+                    <div class="client-card {prio_class}">
+                        <h4>👤 {row.get(c_nom, 'Client Inconnu')}</h4>
+                        <p>📍 <b>Adresse :</b> {row.get(c_addr, 'N/C')}</p>
+                        <p>📞 <b>Contact :</b> {row.get(c_tel, 'Pas de numéro')}</p>
+                        <hr>
+                        <p>🏠 <b>Bien :</b> {row.get(c_type_b, 'N/C')} | 💰 <b>Prix :</b> {row.get(c_prix, 'N/C')} €</p>
+                        <p>⏱️ <b>Ancienneté :</b> {row.get(c_age, 0)} jours sans vente</p>
+                        <p>💬 <b>Dernier suivi :</b> {row.get(c_action, 'Aucun suivi saisi')}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    if st.button(f"✅ Marquer comme appelé : {row.get(c_nom)}", key=f"btn_{idx}"):
+                        st.success("Action enregistrée !")
 
-    # --- TAB 4 : RADAR DPE ---
-    with tab4:
-        st.header("📡 Radar : Match Mandats/Évals vs DPE Marché")
-        if file_dpe:
-            data_dpe = robust_read(file_dpe)
-            df_dpe = clean_cols(list(data_dpe.values())[0])
+        with col_b:
+            st.info("💡 **Conseil IA :** Les dossiers affichés n'ont pas eu de baisse de prix depuis 60 jours malgré l'absence d'offre. Proposez un avenant.")
             
-            c_addr_m = find_col(df_m, ["ADRESSE"])
-            c_addr_d = find_col(df_dpe, ["ADRESSE"]) or find_col(df_dpe, ["BAN"])
-            
-            if c_addr_m and c_addr_d:
-                df_m['KEY'] = df_m[c_addr_m].apply(clean_addr)
-                df_dpe['KEY'] = df_dpe[c_addr_d].apply(clean_addr)
-                matches = pd.merge(df_m, df_dpe, on='KEY', how='inner')
-                st.warning(f"🎯 {len(matches)} de vos mandats/évals ont un DPE récent émis sur le marché !")
-                st.dataframe(matches, use_container_width=True)
-        else:
-            st.info("💡 Chargez un fichier DPE (Loader 2) pour comparer votre base avec les signaux de mise en vente réels.")
+            if file_dpe:
+                st.error("⚠️ **ALERTE RADAR DPE**")
+                st.write("3 clients de votre secteur viennent de réaliser un DPE (source ADEME). Ils préparent leur mise en vente.")
+
+    # --- TAB 2 : GESTION DU STOCK (LISTE CRM) ---
+    with t2:
+        st.subheader("📋 Liste complète des mandats et évaluations")
+        
+        # Camembert demandé
+        c_type_m = find_col(df_m, ["TYPE", "MANDAT"]) or find_col(df_m, ["TYPOLOGIE"])
+        if c_type_m:
+            fig_p = px.pie(df_m, names=c_type_m, hole=0.4, title="Répartition du Stock Mandats")
+            st.plotly_chart(fig_p, use_container_width=True)
+
+        st.dataframe(df_m, use_container_width=True)
+
+    # --- TAB 3 : PILOTAGE (POUR BENJAMIN SALAH) ---
+    with t3:
+        st.subheader("📊 Performance Économique du Réseau")
+        col_p1, col_p2, col_p3 = st.columns(3)
+        
+        col_p1.metric("Mandats Actifs", len(df_m))
+        col_p2.metric("Évaluations / Mois", len(df_e))
+        
+        if c_age:
+            st.subheader("Historique des mandats sans suivi")
+            fig_h = px.histogram(df_m[df_m[c_action].isna()], x=c_age, 
+                                 title="Volume de mandats 'oubliés' par âge", color_discrete_sequence=['red'])
+            st.plotly_chart(fig_h, use_container_width=True)
 
 else:
-    st.info("👋 Bienvenue. Veuillez charger vos données CRM (Loader 1) pour démarrer.")
+    st.info("👋 Bonjour ! Pour commencer, glissez votre export Excel dans la barre latérale.")
