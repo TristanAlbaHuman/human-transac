@@ -3,152 +3,114 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import re
-from datetime import datetime
 
-# --- CONFIGURATION & STYLE ---
-st.set_page_config(page_title="HUMAN Radar | Pilotage Performance", layout="wide")
+# --- CONFIGURATION ---
+st.set_page_config(page_title="HUMAN RADAR v3", layout="wide")
 
 st.markdown("""
     <style>
-    .main { background-color: #f8f9fa; }
-    .stMetric { background-color: #ffffff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
-    div.stButton > button:first-child { background-color: #004a99; color: white; border-radius: 8px; width: 100%; }
+    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
+    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #f0f2f6; border-radius: 5px; padding: 10px; }
+    .stTabs [aria-selected="true"] { background-color: #004a99; color: white; }
     </style>
-    """, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# --- FONCTIONS TECHNIQUES (LE COEUR DU RÉACTEUR) ---
-
+# --- OUTILS DE NETTOYAGE ---
 def clean_address(addr):
-    """Nettoyage pour le matching intelligent entre fichiers"""
     if pd.isna(addr): return ""
     addr = str(addr).lower()
     addr = addr.replace("avenue", "av").replace("boulevard", "bd").replace("rue", "r").replace("impasse", "imp")
-    addr = re.sub(r'[^a-z0-9]', '', addr)
-    return addr
+    return re.sub(r'[^a-z0-9]', '', addr)
 
-def analyze_friction(texte):
-    """Analyse sémantique simplifiée des comptes-rendus de visite"""
-    texte = str(texte).lower()
-    points = []
-    if any(w in texte for w in ["prix", "cher", "budget"]): points.append("💰 Prix")
-    if any(w in texte for w in ["bruit", "route", "nuisance"]): points.append("🔊 Nuisance")
-    if any(w in texte for w in ["travaux", "deco", "rafraichissement"]): points.append("🛠️ Travaux")
-    if any(w in texte for w in ["petit", "surface", "etroit"]): points.append("📐 Agencement")
-    return points if points else ["✅ Positif"]
+# --- CHARGEMENT DES DONNÉES ---
+st.sidebar.title("🏢 HUMAN Data Center")
 
-# --- SIDEBAR : IMPORT & FILTRES ---
-st.sidebar.image("https://www.human-immobilier.fr/img/logo-human-immobilier.svg", width=180)
-st.sidebar.title("📥 Inputs Data")
+# 1. Fichier Principal (Mandats + Evals)
+main_file = st.sidebar.file_uploader("📂 Charger fichier Data (Excel Multi-feuilles)", type=['xlsx'])
 
-upload_mandats = st.sidebar.file_uploader("Mandats (sans SSP)", type=['csv', 'xlsx'])
-upload_evals = st.sidebar.file_uploader("Évaluations Full", type=['csv', 'xlsx'])
-upload_dpe = st.sidebar.file_uploader("Base DPE (ADEME)", type=['csv', 'xlsx'])
+# 2. Fichier DPE
+dpe_file = st.sidebar.file_uploader("📄 Charger fichier DPE ADEME", type=['csv', 'xlsx'])
 
-st.sidebar.markdown("---")
-selected_agences = st.sidebar.multiselect("Filtrer Agences", ["Amboise", "Aubergenville", "Audierne", "Bordeaux", "Toutes"])
-
-# --- LOGIQUE DE CHARGEMENT ---
-@st.cache_data
-def load_and_process(file):
-    if file.name.endswith('.csv'): return pd.read_csv(file)
-    return pd.read_excel(file)
-
-if upload_mandats and upload_evals and upload_dpe:
-    df_m = load_and_process(upload_mandats)
-    df_e = load_and_process(upload_evals)
-    df_d = load_and_process(upload_dpe)
-
-    # Normalisation des colonnes (Gestion des espaces et casses)
-    for df in [df_m, df_e, df_d]:
-        df.columns = [c.strip() for c in df.columns]
-
-    # --- CALCULS RADAR (MATCHING) ---
-    df_e['addr_key'] = df_e['BienAdresse_Adresse'].apply(clean_address)
-    df_d['addr_key'] = df_d['adresse_ban'].apply(clean_address)
-    radar_matches = pd.merge(df_e, df_d, on='addr_key', how='inner')
-
-    # --- INTERFACE PRINCIPALE ---
-    st.title("🚀 HUMAN Radar : Pilotage & Opportunités")
+if main_file:
+    # Lecture de toutes les feuilles d'un coup
+    all_sheets = pd.read_excel(main_file, sheet_name=None)
+    sheet_names = list(all_sheets.keys())
     
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Pilotage", "📡 Radar (Opportunités)", "⚠️ Risques", "🏢 Direction de Zone"])
+    st.sidebar.success(f"Feuilles détectées : {', '.join(sheet_names)}")
+    
+    # Sélection intelligente ou manuelle des feuilles
+    sh_mandats = st.sidebar.selectbox("Sélectionner la feuille MANDATS", sheet_names, 
+                                      index=sheet_names.index(next(s for s in sheet_names if 'mandat' in s.lower())) if any('mandat' in s.lower() for s in sheet_names) else 0)
+    
+    sh_evals = st.sidebar.selectbox("Sélectionner la feuille EVALUATIONS", sheet_names,
+                                     index=sheet_names.index(next(s for s in sheet_names if 'eval' in s.lower())) if any('eval' in s.lower() for s in sheet_names) else 0)
+
+    df_m = all_sheets[sh_mandats]
+    df_e = all_sheets[sh_evals]
+    
+    # Nettoyage des noms de colonnes
+    df_m.columns = [c.strip() for c in df_m.columns]
+    df_e.columns = [c.strip() for c in df_e.columns]
+
+    # --- LOGIQUE RADAR (DPE) ---
+    if dpe_file:
+        df_dpe = pd.read_csv(dpe_file) if dpe_file.name.endswith('.csv') else pd.read_excel(dpe_file)
+        df_dpe.columns = [c.strip() for c in df_dpe.columns]
+        
+        # Matching intelligent
+        df_e['addr_key'] = df_e['BienAdresse_Adresse'].apply(clean_address)
+        df_dpe['addr_key'] = df_dpe['adresse_ban'].apply(clean_address)
+        radar_matches = pd.merge(df_e, df_dpe, on='addr_key', how='inner')
+    else:
+        radar_matches = pd.DataFrame()
+
+    # --- AFFICHAGE DASHBOARD ---
+    st.title("🚀 Pilotage Commercial HUMAN Immobilier")
+    
+    tabs = st.tabs(["📈 Pilotage", "📡 Radar DPE", "⚠️ Risques Stock", "💎 Opportunités", "🏢 Zone"])
 
     # --- TAB 1 : PILOTAGE ---
-    with tab1:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Mandats Actifs", len(df_m))
-        c2.metric("Hot Leads DPE", len(radar_matches), "🔥")
-        c3.metric("Stock Segment 2/3", len(df_m[df_m['AGE MANDAT'] > 180]))
-        c4.metric("Taux Transfo (Est.)", "24%")
-
-        st.subheader("Structure du stock par ancienneté")
-        fig_stock = px.histogram(df_m, x="AGE MANDAT", color="Typologie", barmode="group",
-                                 color_discrete_sequence=px.colors.qualitative.Prism)
-        st.plotly_chart(fig_stock, use_container_width=True)
-
-    # --- TAB 2 : RADAR (SMART MATCHING) ---
-    with tab2:
-        st.header("🎯 Signaux Faibles : Évaluations avec DPE récent")
-        st.info("Ces prospects ont fait une estimation chez nous ET un DPE récemment. Relance prioritaire.")
+    with tabs[0]:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Stock Mandats", len(df_m))
+        c2.metric("Total Évaluations", len(df_e))
+        c3.metric("Matches DPE", len(radar_matches))
         
+        fig_evol = px.histogram(df_m, x="AGE MANDAT", color="Typologie", title="Répartition par Ancienneté")
+        st.plotly_chart(fig_evol, use_container_width=True)
+
+    # --- TAB 2 : RADAR DPE ---
+    with tabs[1]:
+        st.header("🔍 Radar de Conversion (Matching ADEME)")
         if not radar_matches.empty:
-            display_radar = radar_matches[['txtAgence', 'NomDossierEstimation', 'BienAdresse_Adresse', 'date_etablissement_dpe']].copy()
-            display_radar['Action'] = "📞 Rappeler pour Mise en Vente"
-            st.dataframe(display_radar, use_container_width=True)
-            
-            # Simulateur de SMS
-            st.markdown("---")
-            st.subheader("💬 Générateur de Relance")
-            selected_prospect = st.selectbox("Générer message pour :", display_radar['NomDossierEstimation'])
-            st.code(f"Bonjour M./Mme {selected_prospect}, nous avons noté une actualisation de votre dossier technique. Souhaitez-vous une mise à jour de notre estimation de janvier ? Cordialement, HUMAN Immobilier.")
+            st.success(f"Cibles Prioritaires : {len(radar_matches)} prospects ont émis un DPE !")
+            st.dataframe(radar_matches[['txtAgence', 'NomDossierEstimation', 'BienAdresse_Adresse', 'date_etablissement_dpe']], use_container_width=True)
         else:
-            st.warning("Aucun match détecté entre vos évaluations et les derniers DPE.")
+            st.warning("Aucun match trouvé. Importez un fichier DPE pour activer le radar.")
 
-    # --- TAB 3 : RISQUES (ANALYSE SÉMANTIQUE) ---
-    with tab3:
-        st.header("⚠️ Défense du Stock & Analyse de Friction")
+    # --- TAB 3 : RISQUES ---
+    with tabs[2]:
+        st.header("🚨 Analyse des Mandats à Risque")
+        # Calcul probabilité de perte (Score basé sur Age et Actions)
+        df_m['Score_Risque'] = df_m['AGE MANDAT'].apply(lambda x: "Critique" if x > 250 else ("Moyen" if x > 150 else "Sain"))
         
-        col_r1, col_r2 = st.columns([2, 1])
-        
-        with col_r1:
-            st.write("**Mandats critiques (Age > 200j sans action)**")
-            critiques = df_m[df_m['AGE MANDAT'] > 200].copy()
-            st.dataframe(critiques[['NomDossierVendeur', 'AGE MANDAT', 'Actions à prévoir']], use_container_width=True)
+        fig_risk = px.sunburst(df_m, path=['txtAgence', 'Score_Risque', 'Typologie'], values='AGE MANDAT')
+        st.plotly_chart(fig_risk, use_container_width=True)
 
-        with col_r2:
-            st.write("**Analyse des Freins (IA)**")
-            # On simule l'analyse sur la colonne 'Actions à prévoir' ou commentaires
-            df_m['Frictions'] = df_m['Actions à prévoir'].apply(analyze_friction)
-            all_f = [item for sublist in df_m['Frictions'] for item in sublist if item != "✅ Positif"]
-            if all_f:
-                f_counts = pd.Series(all_f).value_counts().reset_index()
-                fig_p = px.pie(f_counts, values='count', names='index', hole=.4, title="Motifs de blocage")
-                st.plotly_chart(fig_p, use_container_width=True)
+    # --- TAB 4 : OPPORTUNITÉS ---
+    with tabs[3]:
+        st.header("💰 Opportunités de Relance (Next Action)")
+        # Analyse des évaluations froides à réactiver
+        df_e['Prochaine_Action'] = "Relance Estimation +6 mois"
+        st.table(df_e[['NomDossierEstimation', 'DateSaisie', 'Prochaine_Action']].head(10))
 
-    # --- TAB 4 : DIRECTION DE ZONE (BENCHMARK) ---
-    with tab4:
-        st.header("🏢 Comparaison Performance Agences")
-        ag_list = df_m['txtAgence'].unique()
-        c_z1, c_z2 = st.columns(2)
-        ag1 = c_z1.selectbox("Agence Référence", ag_list, index=0)
-        ag2 = c_z2.selectbox("Agence Comparée", ag_list, index=1)
-
-        # Radar chart simulation
-        categories = ['Vitesse Vente', 'Qualité Mandat', 'Taux Exclu', 'Réactivité CRM']
-        fig_radar = go.Figure()
-        fig_radar.add_trace(go.Scatterpolar(r=[80, 65, 70, 90], theta=categories, fill='toself', name=ag1))
-        fig_radar.add_trace(go.Scatterpolar(r=[60, 85, 45, 70], theta=categories, fill='toself', name=ag2))
-        fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])))
-        st.plotly_chart(fig_radar, use_container_width=True)
+    # --- TAB 5 : ZONE ---
+    with tabs[4]:
+        st.header("🏆 Benchmarking Inter-Agences")
+        perf_ag = df_m.groupby('txtAgence')['AGE MANDAT'].mean().reset_index()
+        fig_bar = px.bar(perf_ag, x='txtAgence', y='AGE MANDAT', title="Âge Moyen du Stock par Agence")
+        st.plotly_chart(fig_bar, use_container_width=True)
 
 else:
-    # --- PAGE D'ACCUEIL SI VIDE ---
-    st.title("👋 Bienvenue dans HUMAN Radar")
-    st.info("Veuillez uploader les 3 fichiers requis dans la barre latérale pour activer les algorithmes de scoring.")
-    st.image("https://www.human-immobilier.fr/img/human-immobilier-groupe.jpg", use_column_width=True)
-    
-    with st.expander("❓ Aide : Quels fichiers utiliser ?"):
-        st.write("""
-        1. **Mandats :** Export de votre ERP (Format CSV/Excel) contenant l'âge du mandat et la typologie.
-        2. **Évaluations :** Export des dossiers prospects (Estimations réalisées).
-        3. **DPE :** Fichier ADEME ou Open Data des diagnostics récents sur votre secteur.
-        """)
+    st.info("👋 Veuillez charger votre fichier Excel principal (contenant les feuilles Mandats et Evaluations).")
+    st.image("https://www.human-immobilier.fr/img/logo-human-immobilier.svg", width=300)
